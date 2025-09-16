@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: fera-project
+  profiles:
+    include:
+      - db
+      - security
+      - logging
+      - file
+
+homepage:
+  instagram:
+    link: https://www.instagram.com/fetra/

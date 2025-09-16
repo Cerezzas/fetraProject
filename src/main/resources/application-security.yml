@@ -1,0 +1,6 @@
+spring:
+  security:
+    jwt:
+      key: QnUgYml6aW0gc2VjcmV0IGtleS1kaXIuZnNkZmRiaHBnO25qO2xnaEJ1IGJpemltIHNlY3JldCBrZXktZGlyLmZzZGZkYmhwZztuajtsZ2hCdSBiaXppbSBzZWNyZXQga2V5LWRpci5mc2RmZGJocGc7bmo7bGdoQnUgYml6aW0gc2VjcmV0IGtleS1kaXIuZnNkZmRiaHBnO25qO2xnaA==
+      access-expire-time: 30000000
+      refresh-expire-time: 36000000

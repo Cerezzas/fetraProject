@@ -34,13 +34,18 @@ public class ProductServiceImpl implements ProductService {
     private final EnhancedObjectMapper mapper;
     private final ReviewRepository reviewRepository;
 
-    @Override
-    public List<ProductDetailsDto> getProducts() {
-        List<Product> products = productRepository.findAll();
-        return products.stream()
-                .map(this::mapToProductDetailsDto)
-                .collect(Collectors.toList());
-    }
+//    @Override
+//    public List<ProductDetailsDto> getProducts() {
+//        List<Product> products = productRepository.findAll();
+//        return products.stream()
+//                .map(this::mapToProductDetailsDto)
+//                .collect(Collectors.toList());
+//    }
+@Override
+public List<ProductMainPageDto> getProducts() {
+    return mapper.convertList(productRepository.findAll(), ProductMainPageDto.class);
+}
+
 
     @Override
     public ProductDetailsDto getProductById(Integer id) {

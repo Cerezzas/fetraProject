@@ -19,13 +19,19 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
+
+//
 @Configuration
 public class JwtFilter extends OncePerRequestFilter {
     @Autowired
     private JwtService jwtService;
     public static final String ACCESS_TOKEN = "access-token";
     public static final String REFRESH_TOKEN = "refresh-token";
+
+
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
 //        Optional<String> token=Optional.ofNullable(request.getHeader(HttpHeaders.AUTHORIZATION));

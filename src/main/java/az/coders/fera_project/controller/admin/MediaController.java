@@ -13,8 +13,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 
-@RestController
 @RequiredArgsConstructor
+@RestController("adminMediaController")
 @RequestMapping("/admin/medias")
 public class MediaController {
 

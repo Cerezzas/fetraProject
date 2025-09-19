@@ -6,6 +6,7 @@ import az.coders.fera_project.entity.cart.Cart;
 import az.coders.fera_project.entity.cart.CartItem;
 import az.coders.fera_project.entity.cart.Wishlist;
 import az.coders.fera_project.entity.cart.WishlistItem;
+import az.coders.fera_project.entity.register.User;
 import az.coders.fera_project.exception.BadRequestException;
 import az.coders.fera_project.exception.NotFoundException;
 import az.coders.fera_project.repository.ProductRepository;
@@ -13,6 +14,7 @@ import az.coders.fera_project.repository.cart.CartItemRepository;
 import az.coders.fera_project.repository.cart.CartRepository;
 import az.coders.fera_project.repository.cart.WishlistItemRepository;
 import az.coders.fera_project.repository.cart.WishlistRepository;
+import az.coders.fera_project.repository.register.UserRepository;
 import az.coders.fera_project.service.CartItemService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -20,7 +22,6 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
-
 @Service
 @RequiredArgsConstructor
 public class CartItemServiceImpl implements CartItemService {
@@ -30,16 +31,14 @@ public class CartItemServiceImpl implements CartItemService {
     private final ProductRepository productRepository;
     private final WishlistRepository wishlistRepository;
     private final WishlistItemRepository wishlistItemRepository;
-//    private final EnhancedObjectMapper mapper;
+    private final UserRepository userRepository;
 
+    // ======= Добавление товара =======
     @Override
-    public void addProductToCart(Integer userId, Integer productId, Integer quantity) {
-        Cart cart = cartRepository.findByUserId(Long.valueOf(userId))
-                .orElseThrow(() -> new NotFoundException("Cart not found"));
+    public void addProductToCart(Long userId, String sessionKey, Integer productId, Integer quantity) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
 
-        CartItem cartItem = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId)
-                .orElse(null);
-
+        CartItem cartItem = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId).orElse(null);
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new NotFoundException("Product not found"));
 
@@ -63,57 +62,36 @@ public class CartItemServiceImpl implements CartItemService {
         cartItemRepository.save(cartItem);
     }
 
-
+    // ======= Удаление товара =======
     @Override
-    public void removeProductFromCart(Integer cartItemId) {
-        CartItem item = cartItemRepository.findById(Long.valueOf(cartItemId))
+    public void removeProductFromCart(Long userId, String sessionKey, Integer cartItemId) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
+        CartItem item = cartItemRepository.findByIdAndCartId(cartItemId, cart.getId())
                 .orElseThrow(() -> new NotFoundException("Cart item not found"));
         cartItemRepository.delete(item);
     }
 
     @Override
-    public CartItemDto getCartItemById(Long cartItemId) {
-        CartItem item = cartItemRepository.findById(cartItemId)
-                .orElseThrow(() -> new NotFoundException("Cart item not found"));
-        return mapToDto(item);  // вызываем метод маппинга
-    }
-
-    // приватный метод маппинга — сюда, внутри сервиса
-    private CartItemDto mapToDto(CartItem item) {
-        CartItemDto dto = new CartItemDto();
-        dto.setId(item.getId());
-        dto.setProductName(item.getProduct().getName());
-        dto.setImage(item.getProduct().getImage());
-
-
-        BigDecimal price = BigDecimal.valueOf(item.getProduct().getPrice());
-        dto.setProductPrice(BigDecimal.valueOf(price.doubleValue()));
-
-
-        int quantity = item.getQuantity();
-        dto.setQuantity(quantity);
-
-        dto.setTotalPrice(price.multiply(BigDecimal.valueOf(quantity)));
-
-        return dto;
-    }
-
-
-
-    @Override
-    public void removeItem(Integer cartItemId) {
-        removeProductFromCart(cartItemId);
+    public void removeItem(Long userId, String sessionKey, Integer cartItemId) {
+        removeProductFromCart(userId, sessionKey, cartItemId);
     }
 
     @Override
-    public void removeItems(List<Long> cartItemIds) {
+    public void removeItems(Long userId, String sessionKey, List<Long> cartItemIds) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
         List<CartItem> items = cartItemRepository.findAllById(cartItemIds);
-        cartItemRepository.deleteAll(items);
+        items.forEach(item -> {
+            if (item.getCart().getId().equals(cart.getId())) {
+                cartItemRepository.delete(item);
+            }
+        });
     }
 
+    // ======= Обновление количества =======
     @Override
-    public void updateQuantity(Integer cartItemId, int quantity) {
-        CartItem item = cartItemRepository.findById(Long.valueOf(cartItemId))
+    public void updateQuantity(Long userId, String sessionKey, Integer cartItemId, int quantity) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
+        CartItem item = cartItemRepository.findByIdAndCartId(cartItemId, cart.getId())
                 .orElseThrow(() -> new NotFoundException("Cart item not found"));
 
         Product product = item.getProduct();
@@ -127,27 +105,86 @@ public class CartItemServiceImpl implements CartItemService {
         cartItemRepository.save(item);
     }
 
-
+    // ======= Получение товара =======
     @Override
-    public void moveToWishlist(Integer cartItemId) {
-        CartItem cartItem = cartItemRepository.findById(Long.valueOf(cartItemId))
+    public CartItemDto getCartItemById(Long userId, String sessionKey, Long cartItemId) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
+        CartItem item = cartItemRepository.findByIdAndCartId(cartItemId.intValue(), cart.getId())
+                .orElseThrow(() -> new NotFoundException("Cart item not found"));
+        return mapToDto(item);
+    }
+
+    // ======= Перемещение в wishlist =======
+    @Override
+    public void moveToWishlist(Long userId, String sessionKey, Integer cartItemId) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
+        CartItem cartItem = cartItemRepository.findByIdAndCartId(cartItemId, cart.getId())
                 .orElseThrow(() -> new NotFoundException("Cart item not found"));
 
-        Long userId = Long.valueOf(cartItem.getCart().getUser().getId());
-
-        Wishlist wishlist = wishlistRepository.findByUserId(userId)
-                .orElseGet(() -> {
-                    Wishlist w = new Wishlist();
-                    w.setUser(cartItem.getCart().getUser());
-                    return wishlistRepository.save(w);
-                });
+        Wishlist wishlist;
+        if (userId != null) {
+            wishlist = wishlistRepository.findByUserId(userId)
+                    .orElseGet(() -> {
+                        Wishlist w = new Wishlist();
+                        w.setUser(cart.getUser());
+                        return wishlistRepository.save(w);
+                    });
+        } else {
+            wishlist = wishlistRepository.findBySessionKey(sessionKey)
+                    .orElseGet(() -> {
+                        Wishlist w = new Wishlist();
+                        w.setSessionKey(sessionKey);
+                        return wishlistRepository.save(w);
+                    });
+        }
 
         WishlistItem wishlistItem = new WishlistItem();
         wishlistItem.setProduct(cartItem.getProduct());
         wishlistItem.setWishlist(wishlist);
 
         wishlistItemRepository.save(wishlistItem);
-
         cartItemRepository.delete(cartItem);
+    }
+
+    // ======= Приватные методы =======
+    private Cart getOrCreateCart(Long userId, String sessionKey) {
+        if (userId != null) {
+            return cartRepository.findByUserId(userId)
+                    .orElseGet(() -> {
+                        User user = userRepository.findById(userId)
+                                .orElseThrow(() -> new NotFoundException("User not found"));
+                        Cart cart = new Cart();
+                        cart.setUser(user);
+                        cart.setSubtotal(BigDecimal.ZERO);
+                        cart.setTax(BigDecimal.ZERO);
+                        cart.setTotal(BigDecimal.ZERO);
+                        return cartRepository.save(cart);
+                    });
+        } else if (sessionKey != null) {
+            return cartRepository.findBySessionKey(sessionKey)
+                    .orElseGet(() -> {
+                        Cart cart = new Cart();
+                        cart.setSessionKey(sessionKey);
+                        cart.setSubtotal(BigDecimal.ZERO);
+                        cart.setTax(BigDecimal.ZERO);
+                        cart.setTotal(BigDecimal.ZERO);
+                        return cartRepository.save(cart);
+                    });
+        } else {
+            throw new BadRequestException("Either userId or sessionKey must be provided");
+        }
+    }
+
+    private CartItemDto mapToDto(CartItem item) {
+        BigDecimal price = BigDecimal.valueOf(item.getProduct().getPrice());
+        int quantity = item.getQuantity();
+        return new CartItemDto(
+                item.getId(),
+                item.getProduct().getName(),
+                item.getProduct().getImage(),
+                price,
+                quantity,
+                price.multiply(BigDecimal.valueOf(quantity))
+        );
     }
 }

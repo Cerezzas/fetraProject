@@ -60,11 +60,11 @@ public class EnhancedObjectMapper {
     }
 
 
-//
-//    public <E, D> List<D> convertList(List<E> source, Class<D> targetType) {
-//        return objectMapper.convertValue(
-//                source,
-//                objectMapper.getTypeFactory().constructCollectionType(List.class, targetType)
-//        );
-//    }
+
+    public <E, D> List<D> convertList(List<E> source, Class<D> targetType) {
+        return objectMapper.convertValue(
+                source,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, targetType)
+        );
+    }
 }

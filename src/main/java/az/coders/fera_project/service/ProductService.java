@@ -9,7 +9,7 @@ import java.util.List;
 
 public interface ProductService {
 
-    List<ProductDetailsDto> getProducts();
+    List<ProductMainPageDto> getProducts();
     ProductDetailsDto getProductById(Integer id);
     ProductDetailsDto createProduct(ProductRequestDto dto);
     void addImageToProduct(Integer productId, Integer mediaId);

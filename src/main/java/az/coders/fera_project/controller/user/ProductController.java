@@ -20,8 +20,8 @@ public class ProductController {
 
     // Получить список всех продуктов
     @GetMapping
-    public ResponseEntity<List<ProductDetailsDto>> getProducts() {
-        List<ProductDetailsDto> products = productService.getProducts();
+    public ResponseEntity<List<ProductMainPageDto>> getProducts() {
+        List<ProductMainPageDto> products = productService.getProducts();
         return ResponseEntity.ok(products);
     }
 

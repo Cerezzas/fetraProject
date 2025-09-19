@@ -19,22 +19,28 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
     private final AuthService authService;
     @PostMapping("/sign-in")
-    public ResponseEntity< SignInResponse> token(@RequestBody SignInRequest signInRequest){
-        SignInResponse signInResponse = authService.signIn(signInRequest);
-        authService.signIn( signInRequest );
+    public ResponseEntity<SignInResponse> signIn(
+            @RequestBody SignInRequest signInRequest,
+            @CookieValue(name = "SESSION_KEY", required = false) String sessionKey
+    ) {
+        // Вызываем signIn с передачей sessionKey
+        SignInResponse signInResponse = authService.signIn(signInRequest, sessionKey);
+
+        // Устанавливаем cookies
         HttpHeaders headers = new HttpHeaders();
         authService.setCookies(headers, signInResponse);
-        return new ResponseEntity<>(signInResponse,headers, HttpStatus.OK);
+
+        return new ResponseEntity<>(signInResponse, headers, HttpStatus.OK);
     }
 
 
     @PostMapping("/sign-out")
-    public ResponseEntity<?> signout(@CookieValue(name= JwtFilter.REFRESH_TOKEN) String refreshToken){
-        authService.signOut(refreshToken);
+    public ResponseEntity<?> signOut(@CookieValue(name = JwtFilter.REFRESH_TOKEN) String refreshToken) {
         HttpHeaders headers = new HttpHeaders();
-        authService.clearCookie(headers);
+        authService.signOut(refreshToken, headers);
         return new ResponseEntity<>(headers, HttpStatus.NO_CONTENT);
     }
+
 
     @PostMapping("/refresh-token")
     public ResponseEntity<?> refreshToken(@CookieValue(name = "refresh-token") String refreshToken) {

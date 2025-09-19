@@ -28,7 +28,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-
 @Service
 @RequiredArgsConstructor
 public class CartServiceImpl implements CartService {
@@ -42,25 +41,37 @@ public class CartServiceImpl implements CartService {
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final UserRepository userRepository;
-//    private final EnhancedObjectMapper mapper;
 
-// Получить корзину или создать новую, если её нет
+    // ===== Вспомогательные методы =====
 
-    private Cart getOrCreateCart(Long userId) {
-        return cartRepository.findByUserId(userId)
-                .orElseGet(() -> {
-                    User user = userRepository.findById(userId)
-                            .orElseThrow(() -> new NotFoundException("User not found"));
-                    Cart cart = new Cart();
-                    cart.setUser(user);
-                    cart.setSubtotal(BigDecimal.ZERO);
-                    cart.setTax(BigDecimal.ZERO);
-                    cart.setTotal(BigDecimal.ZERO);
-                    return cartRepository.save(cart);
-                });
+    private Cart getOrCreateCart(Long userId, String sessionKey) {
+        if (userId != null) {
+            return cartRepository.findByUserId(userId)
+                    .orElseGet(() -> {
+                        User user = userRepository.findById(userId)
+                                .orElseThrow(() -> new NotFoundException("User not found"));
+                        Cart cart = new Cart();
+                        cart.setUser(user);
+                        cart.setSubtotal(BigDecimal.ZERO);
+                        cart.setTax(BigDecimal.ZERO);
+                        cart.setTotal(BigDecimal.ZERO);
+                        return cartRepository.save(cart);
+                    });
+        } else if (sessionKey != null) {
+            return cartRepository.findBySessionKey(sessionKey)
+                    .orElseGet(() -> {
+                        Cart cart = new Cart();
+                        cart.setSessionKey(sessionKey);
+                        cart.setSubtotal(BigDecimal.ZERO);
+                        cart.setTax(BigDecimal.ZERO);
+                        cart.setTotal(BigDecimal.ZERO);
+                        return cartRepository.save(cart);
+                    });
+        } else {
+            throw new BadRequestException("Either userId or sessionKey must be provided");
+        }
     }
 
-    // Вспомогательный метод: расчет subtotal
     private BigDecimal calculateSubtotal(Cart cart) {
         return cart.getCartItems().stream()
                 .map(item -> BigDecimal.valueOf(item.getProduct().getPrice())
@@ -68,17 +79,16 @@ public class CartServiceImpl implements CartService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
+    // ===== Методы сервиса =====
 
-    //    Основной метод, возвращает
-//    корзину с
-//    расчетами
     @Override
-    public CartDto getCart(Long userId) {
-        Cart cart = getOrCreateCart(userId);
+    public CartDto getCart(Long userId, String sessionKey) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
 
         BigDecimal subtotal = calculateSubtotal(cart);
-        BigDecimal tax = subtotal.multiply(BigDecimal.valueOf(0.15)); // 15% налог
-        BigDecimal deliveryFee = subtotal.compareTo(BigDecimal.valueOf(100)) >= 0 ? BigDecimal.ZERO : BigDecimal.valueOf(10);
+        BigDecimal tax = subtotal.multiply(BigDecimal.valueOf(0.15));
+        BigDecimal deliveryFee = subtotal.compareTo(BigDecimal.valueOf(100)) >= 0
+                ? BigDecimal.ZERO : BigDecimal.valueOf(10);
 
         BigDecimal discountAmount = BigDecimal.ZERO;
         if (cart.getDiscount() != null) {
@@ -89,7 +99,7 @@ public class CartServiceImpl implements CartService {
         BigDecimal grandTotal = subtotal.add(tax).add(deliveryFee).subtract(discountAmount);
 
         List<CartItemDto> products = Optional.ofNullable(cart.getCartItems())
-                .orElse(Collections.emptyList()) // защищает от null
+                .orElse(Collections.emptyList())
                 .stream()
                 .map(item -> new CartItemDto(
                         item.getId(),
@@ -102,48 +112,49 @@ public class CartServiceImpl implements CartService {
                 ))
                 .collect(Collectors.toList());
 
-
         CartDto response = new CartDto();
         response.setProducts(products);
         response.setSubtotal(subtotal);
         response.setTaxes(tax);
         response.setDeliveryFee(deliveryFee);
-        response.setDiscount(discountAmount); // ✅ Добавили
+        response.setDiscount(discountAmount);
         response.setGrandTotal(grandTotal);
 
         return response;
     }
 
     @Override
-    public CartDto applyDiscount(Long userId, String discountCode) {
-        Cart cart = getOrCreateCart(userId);
-        Discount discount = discountRepository.findByCode(discountCode).orElseThrow(() -> new NotFoundException("Discount code not found"));
+    public CartDto applyDiscount(Long userId, String sessionKey, String discountCode) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
+        Discount discount = discountRepository.findByCode(discountCode)
+                .orElseThrow(() -> new NotFoundException("Discount code not found"));
         if (!discount.isActive()) {
             throw new IllegalStateException("Discount is not active");
         }
         cart.setDiscount(discount);
         cartRepository.save(cart);
-        return getCart(userId); // возвращаем обновленную корзину с новым grandTotal }
+        return getCart(userId, sessionKey);
     }
 
     @Override
-    public BigDecimal getGrandTotal(Long userId) {
-        CartDto cartDto = getCart(userId);
+    public BigDecimal getGrandTotal(Long userId, String sessionKey) {
+        CartDto cartDto = getCart(userId, sessionKey);
         return cartDto.getGrandTotal();
     }
-
-
     @Transactional
-    public void checkout(Long userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new NotFoundException("User not found"));
-        Cart cart = getOrCreateCart(userId);
+    @Override
+    public void checkout(Long userId, String sessionKey) {
+        if (userId == null) {
+            throw new BadRequestException("You must be logged in to checkout"); //  текст для гостей
+        }
+
+        Cart cart = getOrCreateCart(userId, sessionKey);
 
         if (cart.getCartItems() == null || cart.getCartItems().isEmpty()) {
             throw new IllegalStateException("Cart is empty");
         }
 
-        // Проверка наличия товаров на складе
+        // Проверка наличия товаров
         for (CartItem item : cart.getCartItems()) {
             Product product = item.getProduct();
             int stock = product.getStockQuantity() != null ? product.getStockQuantity() : 0;
@@ -153,13 +164,15 @@ public class CartServiceImpl implements CartService {
             }
         }
 
-        // Создаём заказ
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
         Order order = new Order();
         order.setUser(user);
         order.setOrderDate(LocalDateTime.now());
         order.setStatus(OrderStatus.PENDING);
 
-        TotalsDto totals = getCartTotals(userId);
+        TotalsDto totals = getCartTotals(userId, sessionKey);
         order.setTotalAmount(totals.getGrandTotal());
 
         List<OrderItem> orderItems = cart.getCartItems().stream()
@@ -168,34 +181,26 @@ public class CartServiceImpl implements CartService {
                     orderItem.setOrder(order);
                     orderItem.setProduct(cartItem.getProduct());
                     orderItem.setQuantity(cartItem.getQuantity());
-                    BigDecimal price = BigDecimal.valueOf(cartItem.getProduct().getPrice());
-                    orderItem.setPrice(price);
+                    orderItem.setPrice(BigDecimal.valueOf(cartItem.getProduct().getPrice()));
 
-                    // Уменьшаем количество на складе
                     Product product = cartItem.getProduct();
                     int updatedStock = product.getStockQuantity() - cartItem.getQuantity();
-                    product.setStockQuantity(Math.max(0, updatedStock)); // не уйдёт в минус
-
+                    product.setStockQuantity(Math.max(0, updatedStock));
                     return orderItem;
                 })
                 .collect(Collectors.toList());
 
         order.setOrderItems(orderItems);
-
         orderRepository.save(order);
-        // продукты уже автоматически обновятся, если правильно настроен каскад или сохранены отдельно
 
-        // очищаем корзину
         cart.getCartItems().clear();
         cart.setDiscount(null);
         cartRepository.save(cart);
     }
 
 
-
-
-    public TotalsDto getCartTotals(Long userId) {
-        Cart cart = getOrCreateCart(userId);
+    public TotalsDto getCartTotals(Long userId, String sessionKey) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
         BigDecimal subtotal = calculateSubtotal(cart);
         BigDecimal tax = subtotal.multiply(BigDecimal.valueOf(0.15));
         BigDecimal deliveryFee = subtotal.compareTo(BigDecimal.valueOf(100)) >= 0 ? BigDecimal.ZERO : BigDecimal.valueOf(10);
@@ -207,14 +212,13 @@ public class CartServiceImpl implements CartService {
         }
 
         BigDecimal grandTotal = subtotal.add(tax).add(deliveryFee).subtract(discountAmount);
-
         return new TotalsDto(subtotal, tax, deliveryFee, discountAmount, grandTotal);
     }
 
     @Transactional
     @Override
-    public void addProductToCart(Long userId, Integer productId, Integer quantity) {
-        Cart cart = getOrCreateCart(userId);
+    public void addProductToCart(Long userId, String sessionKey, Integer productId, Integer quantity) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
 
         CartItem cartItem = cartItemRepository.findByCartIdAndProductId(cart.getId(), productId)
                 .orElse(null);
@@ -226,7 +230,6 @@ public class CartServiceImpl implements CartService {
         int totalRequested = currentQuantityInCart + quantity;
         int stock = product.getStockQuantity() != null ? product.getStockQuantity() : 0;
 
-        // Проверка на наличие
         if (totalRequested > stock) {
             throw new BadRequestException("Only " + stock + " items left in stock for product: " + product.getName());
         }
@@ -243,28 +246,32 @@ public class CartServiceImpl implements CartService {
         cartItemRepository.save(cartItem);
     }
 
-
-
-    //  Метод для удаления товара из корзины
     @Override
-    public void removeProductFromCart(Long userId, Integer cartItemId) {
-        Cart cart = getOrCreateCart(userId);
+    public void removeProductFromCart(Long userId, String sessionKey, Integer cartItemId) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
         CartItem cartItem = cartItemRepository.findByIdAndCartId(cartItemId, cart.getId())
                 .orElseThrow(() -> new NotFoundException("Cart item not found"));
         cartItemRepository.delete(cartItem);
     }
 
-    //       Метод для перемещения товара в список желаемого
     @Override
-    public void moveToWishlist(Long userId, Integer cartItemId) {
-        Cart cart = getOrCreateCart(userId);
+    public void moveToWishlist(Long userId, String sessionKey, Integer cartItemId) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
         CartItem cartItem = cartItemRepository.findByIdAndCartId(cartItemId, cart.getId())
                 .orElseThrow(() -> new NotFoundException("Cart item not found"));
-        Wishlist wishlist = wishlistRepository.findByUserId(userId).orElseGet(() -> {
+
+        Wishlist wishlist = (userId != null)
+                ? wishlistRepository.findByUserId(userId).orElseGet(() -> {
             Wishlist newWishlist = new Wishlist();
             newWishlist.setUser(cart.getUser());
             return wishlistRepository.save(newWishlist);
+        })
+                : wishlistRepository.findBySessionKey(sessionKey).orElseGet(() -> {
+            Wishlist newWishlist = new Wishlist();
+            newWishlist.setSessionKey(sessionKey);
+            return wishlistRepository.save(newWishlist);
         });
+
         WishlistItem wishlistItem = new WishlistItem();
         wishlistItem.setProduct(cartItem.getProduct());
         wishlistItem.setWishlist(wishlist);
@@ -272,18 +279,24 @@ public class CartServiceImpl implements CartService {
         cartItemRepository.delete(cartItem);
     }
 
-
-    // Метод для перемещения нескольких товаров в список желаемого
     @Override
-    public void moveMultipleToWishlist(Long userId, List<Long> cartItemIds) {
-        Cart cart = getOrCreateCart(userId);
+    public void moveMultipleToWishlist(Long userId, String sessionKey, List<Long> cartItemIds) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
         List<CartItem> cartItems = cartItemRepository.findAllById(cartItemIds);
+
         cartItems.forEach(cartItem -> {
-            Wishlist wishlist = wishlistRepository.findByUserId(userId).orElseGet(() -> {
+            Wishlist wishlist = (userId != null)
+                    ? wishlistRepository.findByUserId(userId).orElseGet(() -> {
                 Wishlist newWishlist = new Wishlist();
                 newWishlist.setUser(cart.getUser());
                 return wishlistRepository.save(newWishlist);
+            })
+                    : wishlistRepository.findBySessionKey(sessionKey).orElseGet(() -> {
+                Wishlist newWishlist = new Wishlist();
+                newWishlist.setSessionKey(sessionKey);
+                return wishlistRepository.save(newWishlist);
             });
+
             WishlistItem wishlistItem = new WishlistItem();
             wishlistItem.setProduct(cartItem.getProduct());
             wishlistItem.setWishlist(wishlist);
@@ -292,242 +305,82 @@ public class CartServiceImpl implements CartService {
         });
     }
 
-
-    //    Метод для удаления нескольких товаров из корзины
     @Override
-    public void removeMultipleFromCart(Long userId, List<Long> cartItemIds) {
-        Cart cart = getOrCreateCart(userId);
+    public void removeMultipleFromCart(Long userId, String sessionKey, List<Long> cartItemIds) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
         List<CartItem> cartItems = cartItemRepository.findAllById(cartItemIds);
-        cartItems.forEach(cartItem -> cartItemRepository.delete(cartItem));
+        cartItems.forEach(cartItemRepository::delete);
     }
 
-//
-    //       Метод для получения быстрого отображения корзины
+    @Transactional
+    public void mergeCart(Long userId, String sessionKey) {
+        if (sessionKey == null) return;
+
+        // 1. Берём гостевую корзину
+        Cart guestCart = cartRepository.findBySessionKey(sessionKey).orElse(null);
+        if (guestCart == null) return;
+
+        // 2. Ищем корзину пользователя
+        Cart userCart = cartRepository.findByUserId(userId).orElse(null);
+
+        // 3. Если корзины нет → создаём новую
+        if (userCart == null) {
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new NotFoundException("User not found"));
+
+            userCart = new Cart();
+            userCart.setUser(user);
+            userCart = cartRepository.save(userCart);
+        }
+
+        // 4. Мержим товары
+        for (CartItem guestItem : guestCart.getCartItems()) {
+            Optional<CartItem> existing = userCart.getCartItems().stream()
+                    .filter(i -> i.getProduct().getId().equals(guestItem.getProduct().getId()))
+                    .findFirst();
+
+            if (existing.isPresent()) {
+                existing.get().setQuantity(existing.get().getQuantity() + guestItem.getQuantity());
+            } else {
+                guestItem.setCart(userCart); // переназначаем корзину
+                userCart.getCartItems().add(guestItem);
+            }
+        }
+
+        // 5. Сохраняем результат
+        cartRepository.save(userCart);
+
+        // 6. Удаляем гостевую корзину
+        cartRepository.delete(guestCart);
+    }
+
+
+
     @Override
-    public QuickCartDto getQuickCart(Long userId) {
-        Cart cart = getOrCreateCart(userId);
+    public QuickCartDto getQuickCart(Long userId, String sessionKey) {
+        Cart cart = getOrCreateCart(userId, sessionKey);
         List<CartItemDto> items = Optional.ofNullable(cart.getCartItems())
-                .orElse(Collections.emptyList()).stream().map(item -> {
-                    Product product = item.getProduct(); // Преобразуем цену из Double в BigDecimal
+                .orElse(Collections.emptyList())
+                .stream()
+                .map(item -> {
+                    Product product = item.getProduct();
                     BigDecimal productPrice = BigDecimal.valueOf(product.getPrice());
-                    return new CartItemDto(item.getId(), product.getName(), product.getImage(), productPrice,
-                            //                                 Используем BigDecimal для цены
+                    return new CartItemDto(
+                            item.getId(),
+                            product.getName(),
+                            product.getImage(),
+                            productPrice,
                             item.getQuantity(),
-                            productPrice.multiply(BigDecimal.valueOf(item.getQuantity())));
-                }).collect(Collectors.toList());
+                            productPrice.multiply(BigDecimal.valueOf(item.getQuantity()))
+                    );
+                })
+                .collect(Collectors.toList());
+
         BigDecimal subtotal = items.stream()
                 .map(CartItemDto::getTotalPrice)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+
         return new QuickCartDto(subtotal, items);
     }
 }
 
-
-//    Метод для применения скидки
-//    @Override
-//    public void applyDiscount(Long userId, String discountCode) {
-//        Cart cart = getOrCreateCart(userId); // Проверяем наличие скидки по коду
-//        Discount discount = discountRepository.findByCode(discountCode)
-//                .orElseThrow(() -> new NotFoundException("Discount not found")); // Применяем скидку
-//        if (discount.isActive()) {
-//            BigDecimal subtotal = cart.getSubtotal();
-//            BigDecimal discountAmount = subtotal.multiply(discount.getDiscountPercentage())
-//                    .divide(BigDecimal.valueOf(100)); // Перерасчет итоговой суммы с учетом скидки
-//            BigDecimal tax = subtotal.multiply(BigDecimal.valueOf(0.15));
-//            BigDecimal deliveryFee = subtotal.compareTo(BigDecimal.valueOf(100)) >= 0 ?
-//                    BigDecimal.ZERO : BigDecimal.valueOf(10);
-//            BigDecimal grandTotal = subtotal.subtract(discountAmount).add(tax).add(deliveryFee);
-//            //               Обновляем данные корзины
-//            cart.setDiscount(discount);
-//            cart.setTotal(grandTotal);
-//            cartRepository.save(cart);
-//        }
-//    }
-//
-
-//
-//
-//            @Override
-//    public TotalsDto getCartTotals(Long userId) {
-//        Cart cart = getOrCreateCart(userId);
-//
-//        // НЕ использовать mapper.convertValue
-//        // Используем свой метод конвертации в DTO:
-//        CartDto cartDto = convertToCartDto(cart);
-//
-//        BigDecimal subtotal = cartDto.getItems().stream()
-//                .map(CartItemDto::getTotalPrice)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//        BigDecimal taxes = subtotal.multiply(BigDecimal.valueOf(0.15));
-//        BigDecimal deliveryFee = subtotal.compareTo(BigDecimal.valueOf(100)) >= 0
-//                ? BigDecimal.ZERO
-//                : BigDecimal.valueOf(10);
-//
-//        BigDecimal discount = cartDto.getDiscount() != null ? cartDto.getDiscount() : BigDecimal.ZERO;
-//
-//        BigDecimal grandTotal = subtotal.subtract(discount).add(taxes).add(deliveryFee);
-//
-//        return new TotalsDto(subtotal.doubleValue(), taxes.doubleValue(), deliveryFee.doubleValue(), grandTotal.doubleValue());
-//    }
-//
-//
-//    @Override
-//    @Transactional
-//    public void checkout(Long userId, OrderDto orderDto) {
-//        User user = userRepository.findById(userId)
-//                .orElseThrow(() -> new NotFoundException("User not found"));
-//
-//        Cart cart = getOrCreateCart(userId);
-//
-//        if (cart.getCartItems() == null || cart.getCartItems().isEmpty()) {
-//            throw new NotFoundException("Cart is empty");
-//        }
-//
-//        Order order = new Order();
-//        order.setUser(user);
-//
-//        // Добавлено: получение выбранного адреса доставки из пользователя
-//        Address selectedAddress = user.getSelectedAddress();
-//        if (selectedAddress == null) {
-//            throw new BadRequestException("No selected address found for this user");
-//        }
-//        order.setShippingAddress(selectedAddress);
-//
-//        order.setStatus(OrderStatus.PENDING);
-//        order.setOrderDate(LocalDateTime.now());
-//
-//        BigDecimal subtotal = cart.getCartItems().stream()
-//                .map(item -> BigDecimal.valueOf(item.getProduct().getPrice())
-//                        .multiply(BigDecimal.valueOf(item.getQuantity())))
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//        Discount appliedDiscount = null;
-//        BigDecimal discountAmount = BigDecimal.ZERO;
-//
-//        // Попытка взять скидку из запроса
-//        if (orderDto.getDiscountCode() != null && !orderDto.getDiscountCode().isBlank()) {
-//            appliedDiscount = discountRepository.findByCode(orderDto.getDiscountCode())
-//                    .orElseThrow(() -> new NotFoundException("Invalid discount code"));
-//        }
-//        // Или из корзины, если в запросе скидки нет
-//        else if (cart.getDiscount() != null) {
-//            appliedDiscount = cart.getDiscount();
-//        }
-//
-//        // Расчет суммы со скидкой (если нужно)
-//        // if (appliedDiscount != null) {
-//        //     discountAmount = subtotal.multiply(appliedDiscount.getDiscountPercentage())
-//        //             .divide(BigDecimal.valueOf(100));
-//        //     order.setDiscount(appliedDiscount);
-//        // }
-//
-//        BigDecimal totalAmount = subtotal.subtract(discountAmount);
-//        BigDecimal taxes = calculateTaxes(totalAmount);
-//        BigDecimal deliveryFee = calculateDeliveryFee(cart);
-//        BigDecimal grandTotal = totalAmount.add(taxes).add(deliveryFee);
-//
-//        order.setTotalAmount(grandTotal);
-//
-//        Order savedOrder = orderRepository.save(order);
-//
-//        for (CartItem cartItem : cart.getCartItems()) {
-//            OrderItem orderItem = new OrderItem();
-//            orderItem.setOrder(savedOrder);
-//            orderItem.setProduct(cartItem.getProduct());
-//            orderItem.setQuantity(cartItem.getQuantity());
-//            orderItem.setPrice(BigDecimal.valueOf(cartItem.getProduct().getPrice()));
-//            orderItemRepository.save(orderItem);
-//        }
-//
-//        clearCart(userId);
-//    }
-//
-//
-//
-//    private BigDecimal calculateTaxes(BigDecimal totalAmount) {
-//        return totalAmount.multiply(BigDecimal.valueOf(0.1));
-//    }
-//
-//    private BigDecimal calculateDeliveryFee(Cart cart) {
-//        return BigDecimal.valueOf(5);
-//    }
-//
-//    @Override
-//    public void clearCart(Long userId) {
-//        Cart cart = getOrCreateCart(userId);
-//        cartItemRepository.deleteAllByCartId(cart.getId());
-//    }
-//
-//    @Override
-//    public QuickCartDto getQuickCart(Long userId) {
-//        Cart cart = getOrCreateCart(userId);
-//
-//        List<CartItemDto> items = Optional.ofNullable(cart.getCartItems())
-//                .orElse(Collections.emptyList())
-//                .stream()
-//                .map(item -> {
-//                    Product product = item.getProduct();
-//                    return new CartItemDto(
-//                            item.getId(),
-//                            product.getName(),
-//                            product.getImage(),
-//                            product.getPrice(),
-//                            item.getQuantity(),
-//                            BigDecimal.valueOf(product.getPrice()).multiply(BigDecimal.valueOf(item.getQuantity()))
-//                    );
-//                })
-//                .toList();
-//
-//        int totalItems = items.stream()
-//                .mapToInt(CartItemDto::getQuantity)
-//                .sum();
-//
-//        BigDecimal subtotal = items.stream()
-//                .map(CartItemDto::getTotalPrice)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//        return new QuickCartDto(totalItems, items, subtotal);
-//    }
-//
-//
-//    @Override
-//    public CartDto getCart(Long userId) {
-//        Cart cart = getOrCreateCart(userId);
-//        return convertToCartDto(cart);
-//    }
-
-//    private CartDto convertToCartDto (Cart cart){
-//        List<CartItemDto> itemDtos = Optional.ofNullable(cart.getCartItems())
-//                .orElse(Collections.emptyList())
-//                .stream()
-//                .map(item -> {
-//                    Product product = item.getProduct();
-//                    return new CartItemDto(
-//                            item.getId(), // ✅ передаём ID CartItem
-//                            product.getName(),
-//                            product.getImageUrl(),
-//                            product.getPrice(),
-//                            item.getQuantity(),
-//                            BigDecimal.valueOf(product.getPrice()).multiply(BigDecimal.valueOf(item.getQuantity()))
-//                    );
-//                })
-//                .collect(Collectors.toList());
-//
-//        BigDecimal subtotal = itemDtos.stream()
-//                .map(CartItemDto::getTotalPrice)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//
-//        BigDecimal tax = subtotal.multiply(BigDecimal.valueOf(0.15));
-//        BigDecimal discount = cart.getDiscount() != null
-//                ? subtotal.multiply(cart.getDiscount().getDiscountPercentage().divide(BigDecimal.valueOf(100)))
-//                : BigDecimal.ZERO;
-//
-//        BigDecimal deliveryFee = subtotal.compareTo(BigDecimal.valueOf(100)) >= 0
-//                ? BigDecimal.ZERO
-//                : BigDecimal.valueOf(10);
-//
-//        BigDecimal total = subtotal.subtract(discount).add(tax).add(deliveryFee);
-//
-//        return new CartDto(itemDtos, subtotal, tax, discount, deliveryFee, total);
-//    }

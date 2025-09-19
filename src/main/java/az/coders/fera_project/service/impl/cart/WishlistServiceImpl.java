@@ -6,6 +6,7 @@ import az.coders.fera_project.entity.Product;
 import az.coders.fera_project.entity.cart.Wishlist;
 import az.coders.fera_project.entity.cart.WishlistItem;
 import az.coders.fera_project.entity.register.User;
+import az.coders.fera_project.exception.BadRequestException;
 import az.coders.fera_project.exception.NotFoundException;
 import az.coders.fera_project.repository.ProductRepository;
 import az.coders.fera_project.repository.cart.WishlistItemRepository;
@@ -16,7 +17,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-
 @Service
 @RequiredArgsConstructor
 public class WishlistServiceImpl implements WishlistService {
@@ -27,55 +27,66 @@ public class WishlistServiceImpl implements WishlistService {
     private final ProductRepository productRepository;
     private final EnhancedObjectMapper mapper;
 
-    public Wishlist getOrCreateWishlist(Integer userId) {
-        return wishlistRepository.findByUserId(Long.valueOf(userId))
-                .orElseGet(() -> {
-                    User user = userRepository.findById(Long.valueOf(userId))
-                            .orElseThrow(() -> new NotFoundException("User not found"));
-                    Wishlist wishlist = new Wishlist();
-                    wishlist.setUser(user);
-                    return wishlistRepository.save(wishlist);
-                });
+    // Получаем или создаём вишлист для юзера или гостя
+    private Wishlist getOrCreateWishlist(Long userId, String sessionKey) {
+        if (userId != null) {
+            return wishlistRepository.findByUserId(userId)
+                    .orElseGet(() -> {
+                        User user = userRepository.findById(userId)
+                                .orElseThrow(() -> new NotFoundException("User not found"));
+                        Wishlist wishlist = new Wishlist();
+                        wishlist.setUser(user);
+                        return wishlistRepository.save(wishlist);
+                    });
+        } else if (sessionKey != null && !sessionKey.isBlank()) {
+            return wishlistRepository.findBySessionKey(sessionKey)
+                    .orElseGet(() -> {
+                        Wishlist wishlist = new Wishlist();
+                        wishlist.setSessionKey(sessionKey);
+                        return wishlistRepository.save(wishlist);
+                    });
+        } else {
+            throw new BadRequestException("Either userId or sessionKey must be provided");
+        }
     }
 
-    public List<WishlistItemDto> getWishlistItems(Integer userId) {
-        Wishlist wishlist = getOrCreateWishlist(userId);
+    @Override
+    public List<WishlistItemDto> getWishlistItems(Long userId, String sessionKey) {
+        Wishlist wishlist = getOrCreateWishlist(userId, sessionKey);
         return mapper.convertList(wishlist.getItems(), WishlistItemDto.class);
     }
 
-    public void addProductToWishlist(Integer userId, Integer productId) {
-        Wishlist wishlist = getOrCreateWishlist(userId);
+    @Override
+    public void addProductToWishlist(Long userId, String sessionKey, Integer productId) {
+        Wishlist wishlist = getOrCreateWishlist(userId, sessionKey);
 
         Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new NotFoundException("Product not found"));
 
-        // Проверка на дубликаты, чтобы не добавлять один и тот же товар несколько раз
         boolean exists = wishlist.getItems().stream()
                 .anyMatch(item -> item.getProduct().getId().equals(productId));
 
         if (exists) {
-            throw new IllegalStateException("Product already in wishlist");
+            throw new BadRequestException("Product already in wishlist");
         }
 
         WishlistItem wishlistItem = new WishlistItem();
         wishlistItem.setProduct(product);
         wishlistItem.setWishlist(wishlist);
-
         wishlistItemRepository.save(wishlistItem);
     }
 
-    public void removeProductFromWishlist(Integer userId, Integer wishlistItemId) {
-        Wishlist wishlist = getOrCreateWishlist(userId);
+    @Override
+    public void removeProductFromWishlist(Long userId, String sessionKey, Integer wishlistItemId) {
+        Wishlist wishlist = getOrCreateWishlist(userId, sessionKey);
 
         WishlistItem item = wishlistItemRepository.findById(Long.valueOf(wishlistItemId))
                 .orElseThrow(() -> new NotFoundException("Wishlist item not found"));
 
-        if (!item.getWishlist().equals(wishlist)) {
-            throw new NotFoundException("Wishlist item does not belong to user");
+        if (!item.getWishlist().getId().equals(wishlist.getId())) {
+            throw new NotFoundException("Wishlist item does not belong to this user/session");
         }
 
         wishlistItemRepository.delete(item);
     }
-
-    // Можно добавить метод очистки или перемещения в корзину, если надо
 }

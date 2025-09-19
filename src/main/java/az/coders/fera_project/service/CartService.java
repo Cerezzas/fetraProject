@@ -10,33 +10,33 @@ import java.util.List;
 public interface CartService {
 
     // Получить текущую корзину пользователя
-    CartDto getCart(Long userId);
+    CartDto getCart(Long userId, String sessionKey);
 
     // Получить только итоговую сумму корзины
-    BigDecimal getGrandTotal(Long userId);
+    BigDecimal getGrandTotal(Long userId, String sessionKey);
 
     // Применить скидку к корзине
-    CartDto applyDiscount(Long userId, String discountCode);
+    CartDto applyDiscount(Long userId, String sessionKey, String discountCode);
 
     // Оформить заказ (чекаут)
-    void checkout(Long userId);
+    void checkout(Long userId, String sessionKey);
 
     // Добавить товар в корзину
-    void addProductToCart(Long userId, Integer productId, Integer quantity);
+    void addProductToCart(Long userId, String sessionKey, Integer productId, Integer quantity);
 
     // Удалить товар из корзины
-    void removeProductFromCart(Long userId, Integer cartItemId);
+    void removeProductFromCart(Long userId, String sessionKey, Integer cartItemId);
 
     // Переместить товар в список желаемого
-    void moveToWishlist(Long userId, Integer cartItemId);
+    void moveToWishlist(Long userId, String sessionKey, Integer cartItemId);
 
     // Переместить несколько товаров в список желаемого
-    void moveMultipleToWishlist(Long userId, List<Long> cartItemIds);
+    void moveMultipleToWishlist(Long userId, String sessionKey, List<Long> cartItemIds) ;
 
-    // Удалить несколько товаров из корзины
-    void removeMultipleFromCart(Long userId, List<Long> cartItemIds);
+    void removeMultipleFromCart(Long userId, String sessionKey, List<Long> cartItemIds);
 
+    void mergeCart(Long userId, String sessionKey);
     // Получить "быструю" корзину (для отображения в UI)
-    QuickCartDto getQuickCart(Long userId);
+    QuickCartDto getQuickCart(Long userId, String sessionKey);
 }
 

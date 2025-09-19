@@ -3,18 +3,22 @@ package az.coders.fera_project.service.impl.security;
 import az.coders.fera_project.config.JwtFilter;
 import az.coders.fera_project.dto.register.RefreshTokenDto;
 import az.coders.fera_project.dto.register.RegisterRequest;
+import az.coders.fera_project.entity.cart.Cart;
 import az.coders.fera_project.entity.register.PasswordResetToken;
 import az.coders.fera_project.entity.register.RefreshToken;
 import az.coders.fera_project.entity.register.User;
+import az.coders.fera_project.exception.BadRequestException;
 import az.coders.fera_project.exception.NotFoundException;
 import az.coders.fera_project.models.AccessTokenResponse;
 import az.coders.fera_project.models.SignInRequest;
 import az.coders.fera_project.models.SignInResponse;
+import az.coders.fera_project.repository.cart.CartRepository;
 import az.coders.fera_project.repository.register.AuthorityRepository;
 import az.coders.fera_project.repository.register.PasswordResetTokenRepository;
 import az.coders.fera_project.repository.register.RefreshTokenRepository;
 import az.coders.fera_project.repository.register.UserRepository;
 import az.coders.fera_project.service.AuthService;
+import az.coders.fera_project.service.CartService;
 import az.coders.fera_project.service.JwtService;
 import az.coders.fera_project.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,6 +36,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.List;
@@ -52,20 +57,68 @@ public class AuthServiceImpl implements AuthService {
     private JwtService jwtService;
     private final UserService userService;
 
+    private final CartService cartService;
+    private final CartRepository cartRepository;
+
     private final PasswordEncoder passwordEncoder;
     private final UserRepository userRepository;
     private final AuthorityRepository authorityRepository;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
 
+    private Cart getOrCreateCart(Long userId, String sessionKey) {
+        if (userId != null) {
+            return cartRepository.findByUserId(userId)
+                    .orElseGet(() -> {
+                        User user = userRepository.findById(userId)
+                                .orElseThrow(() -> new NotFoundException("User not found"));
+                        Cart cart = new Cart();
+                        cart.setUser(user);
+                        cart.setSubtotal(BigDecimal.ZERO);
+                        cart.setTax(BigDecimal.ZERO);
+                        cart.setTotal(BigDecimal.ZERO);
+                        return cartRepository.save(cart);
+                    });
+        } else if (sessionKey != null) {
+            return cartRepository.findBySessionKey(sessionKey)
+                    .orElseGet(() -> {
+                        Cart cart = new Cart();
+                        cart.setSessionKey(sessionKey);
+                        cart.setSubtotal(BigDecimal.ZERO);
+                        cart.setTax(BigDecimal.ZERO);
+                        cart.setTotal(BigDecimal.ZERO);
+                        return cartRepository.save(cart);
+                    });
+        } else {
+            throw new BadRequestException("Either userId or sessionKey must be provided");
+        }
+    }
 
     @Override
-    public SignInResponse signIn(SignInRequest signInRequest) {
-        UsernamePasswordAuthenticationToken usernamePasswordAuthenticationToken = new UsernamePasswordAuthenticationToken(signInRequest.getUsername(), signInRequest.getPassword());
-        Authentication authenticate = authenticationManager.authenticate(usernamePasswordAuthenticationToken);
-        String token = jwtService.issueToken(authenticate);
-        AccessTokenResponse accessTokenResponse =new AccessTokenResponse(token);
-        RefreshTokenDto refreshTokenDTO=issueRefreshToken(signInRequest.getUsername());
-        return new SignInResponse(accessTokenResponse,refreshTokenDTO);
+    public SignInResponse signIn(SignInRequest signInRequest, String sessionKey) {
+        // 1. обычная аутентификация
+        Authentication auth = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(signInRequest.getUsername(), signInRequest.getPassword())
+        );
+
+        User user = userRepository.findByUsername(signInRequest.getUsername())
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // 2. мержим корзину гостя и юзера
+        if (sessionKey != null && !sessionKey.isBlank()) {
+            try {
+                cartService.mergeCart(Long.valueOf(user.getId()), sessionKey);
+            } catch (Exception e) {
+                // лучше не падать при логине из-за корзины, просто логируем
+                System.err.println("⚠️ Ошибка при merge корзины: " + e.getMessage());
+            }
+        }
+
+        // 3. выдаём токены
+        String token = jwtService.issueToken(auth);
+        AccessTokenResponse accessTokenResponse = new AccessTokenResponse(token);
+        RefreshTokenDto refreshTokenDTO = issueRefreshToken(signInRequest.getUsername());
+
+        return new SignInResponse(accessTokenResponse, refreshTokenDTO);
     }
 
     private RefreshTokenDto issueRefreshToken(String username) {
@@ -112,14 +165,35 @@ public class AuthServiceImpl implements AuthService {
         headers.add(HttpHeaders.SET_COOKIE, refreshCookie.toString());
     }
 
+
     @Override
-    public void signOut(String refreshToken) {
-        refreshTokenRepository.findByToken(refreshToken).
-                ifPresent(refresh -> {
-                    refresh.setValid(false);
-                    refreshTokenRepository.save(refresh);
-                });
+    public void signOut(String refreshToken, HttpHeaders headers) {
+        // инвалидируем refresh token
+        refreshTokenRepository.findByToken(refreshToken).ifPresent(refresh -> {
+            refresh.setValid(false);
+            refreshTokenRepository.save(refresh);
+        });
+
+        // чистим токены
+        clearCookie(headers);
+
+        // создаём новый sessionKey для гостя
+        String newSessionKey = UUID.randomUUID().toString();
+
+        ResponseCookie sessionCookie = ResponseCookie.from("SESSION_KEY", newSessionKey)
+                .maxAge(60L * 60 * 24 * 7) // 7 дней
+                .path("/")
+                .secure(false)
+                .httpOnly(true)
+                .sameSite("LAX")
+                .build();
+
+        headers.add(HttpHeaders.SET_COOKIE, sessionCookie.toString());
+
+        // опционально можно создать пустую корзину для этого sessionKey
+        getOrCreateCart(null, newSessionKey);
     }
+
 
     @Override
     public SignInResponse refreshCookie(String refreshToken) {

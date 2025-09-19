@@ -22,6 +22,8 @@ public class Wishlist {
     @JsonIgnore // ✅ Добавь это
     private User user;  // связь с пользователем
 
+    @Column(name = "session_key")
+    private String sessionKey; // уникальный идентификатор гостя
 
     @OneToMany(mappedBy = "wishlist", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<WishlistItem> items = new ArrayList<>();  // список товаров в вишлисте

@@ -6,16 +6,16 @@ import az.coders.fera_project.models.SignInResponse;
 import org.springframework.http.HttpHeaders;
 
 public interface AuthService {
-    SignInResponse signIn(SignInRequest signInRequest);
+    SignInResponse signIn(SignInRequest signInRequest, String sessionKey);
 
     void setCookies(HttpHeaders headers, SignInResponse signInResponse);
 
     void clearCookie(HttpHeaders headers);
 
-    void signOut(String refreshToken);
+//    void signOut(String refreshToken);
 
 
-
+    void signOut(String refreshToken, HttpHeaders headers);
     SignInResponse refreshCookie(String refreshToken);
 
     void registerUser(RegisterRequest request);

@@ -18,6 +18,9 @@ public class Cart {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "session_key")
+    private String sessionKey; // уникальный идентификатор гостя
+
     @OneToOne
     @JsonIgnore
     private User user;
